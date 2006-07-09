@@ -80,10 +80,9 @@ int main(int argc, char **argv)
         if (clientfd == -1) {
             if (errno == EBADF || errno == EINVAL || errno == ENOTSOCK ||
                 errno == EOPNOTSUPP || errno == EFAULT)
-            {
                 die("accept()");
-            }
-            warn("accept()");
+            if (errno != EINTR)
+                warn("accept()");
             continue;
         }
 
