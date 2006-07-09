@@ -17,6 +17,7 @@
 /* }}} */
 
 #define die(...) err(EXIT_FAILURE, __VA_ARGS__)
+
 #define LISTEN_IP "0.0.0.0"
 #define LISTEN_PORT 54321
 #define REMOTE_IP "10.66.1.10"
@@ -25,13 +26,14 @@
 #define FILTER_OUT "echo '==> start <=='; tr o 0; echo '==> end <=='"
 #define BUF_SIZE 1024
 
-const char *colortable[] = {
-    "7;32",
-    "7;31",
-    "7;33",
-    "7;36",
-    "7;34"
-};
+const char *colortable[] =
+/*{{{*/ {
+    "7;32", /* general */
+    "7;31", /* client -> in filter */
+    "7;33", /* in filter -> server */
+    "7;36", /* server -> out filter */
+    "7;34", /* out filter -> client */
+}; /*}}}*/
 
 struct pipe_t
 /*{{{*/ {
