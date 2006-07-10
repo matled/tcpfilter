@@ -1,11 +1,13 @@
 /* (c) 2006 Matthias Lederhofer <matled@gmx.net> */
 /* include {{{ */
+#define _BSD_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <err.h>
 #include <errno.h>
+#include <getopt.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -17,16 +19,21 @@
 /* }}} */
 
 #define die(...) err(EXIT_FAILURE, __VA_ARGS__)
+#define diex(...) errx(EXIT_FAILURE, __VA_ARGS__)
 
-#define LISTEN_IP "0.0.0.0"
-#define LISTEN_PORT 54321
-#define REMOTE_IP "10.66.1.10"
-#define REMOTE_PORT 80
-#define FILTER_IN "cat"
-#define FILTER_OUT "echo '==> start <=='; tr o 0; echo '==> end <=='"
+#define DEFAULT_LISTEN_ADDR "0.0.0.0"
+#define DEFAULT_FILTER_IN "cat"
+#define DEFAULT_FILTER_OUT "cat"
 #define BUF_SIZE 1024
 
-const char *colortable[] =
+static struct {
+    struct sockaddr_in listen;
+    struct sockaddr_in remote;
+    const char *filter_in;
+    const char *filter_out;
+} global;
+
+static const char *colortable[] =
 /*{{{*/ {
     "7;32", /* general */
     "7;31", /* client -> in filter */
@@ -46,29 +53,29 @@ struct pipe_t
 }; /*}}}*/
 
 static void handle_client(struct sockaddr_in*, int);
-static void logging(struct sockaddr_in*, int id, const char*, ...);
-static void logtraffic(struct sockaddr_in *, int, const char *, ssize_t);
-static void filter(const char *cmd, int in, int out);
+static void logging(struct sockaddr_in*, int, const char*, ...);
+static void logtraffic(struct sockaddr_in *, int, const char*, ssize_t);
+static void filter(const char*, int, int);
 static void sig_child(int);
+static void arguments(int, char**);
+static void usage(void);
 
 int main(int argc, char **argv)
 /*{{{*/ {
+    arguments(argc, argv);
+    
     if (signal(SIGCHLD, sig_child)) die("signal()");
     int listenfd = socket(PF_INET, SOCK_STREAM, 0);
     if (listenfd == -1) die("socket()");
     {
         int tmp = 1;
-        if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &tmp, sizeof(tmp)) == -1)
+        if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR,
+                &tmp, sizeof(tmp)) == -1)
             die("setsockopt(SO_REUSEADDR)");
     }
-    {
-        struct sockaddr_in tmp;
-        memset(&tmp, '\0', sizeof(tmp));
-        tmp.sin_family = AF_INET;
-        tmp.sin_port = htons(LISTEN_PORT);
-        tmp.sin_addr.s_addr = inet_addr(LISTEN_IP);
-        if (bind(listenfd, (struct sockaddr*)&tmp, sizeof(tmp)) == -1) die("bind()");
-    }
+    if (bind(listenfd, (struct sockaddr*)&global.listen,
+            sizeof(global.listen)) == -1)
+        die("bind()");
     if (listen(listenfd, 0) == -1) die("listen()");
 
     struct sockaddr_in clientaddr;
@@ -104,14 +111,9 @@ static void handle_client(struct sockaddr_in *addr, int client)
 
     int server = socket(PF_INET, SOCK_STREAM, 0);
     if (server == -1) die("socket()");
-    {
-        struct sockaddr_in tmp;
-        memset(&tmp, '\0', sizeof(tmp));
-        tmp.sin_family = AF_INET;
-        tmp.sin_port = htons(REMOTE_PORT);
-        tmp.sin_addr.s_addr = inet_addr(REMOTE_IP);
-        if (connect(server, (struct sockaddr*)&tmp, sizeof(tmp)) == -1) die("connect()");
-    }
+    if (connect(server, (struct sockaddr*)&global.remote,
+            sizeof(global.remote)) == -1)
+        die("connect()");
 
     struct pipe_t pipes[4];
     pipes[0].infd = client;
@@ -136,7 +138,7 @@ static void handle_client(struct sockaddr_in *addr, int client)
                 close(server);
                 close(fd[0][1]);
                 close(fd[1][0]);
-                filter(FILTER_IN, fd[0][0], fd[1][1]);
+                filter(global.filter_in, fd[0][0], fd[1][1]);
                 exit(EXIT_SUCCESS);
             case -1:
                 die("fork()");
@@ -156,7 +158,7 @@ static void handle_client(struct sockaddr_in *addr, int client)
                 close(server);
                 close(fd[0][1]);
                 close(fd[1][0]);
-                filter(FILTER_OUT, fd[0][0], fd[1][1]);
+                filter(global.filter_out, fd[0][0], fd[1][1]);
                 exit(EXIT_SUCCESS);
             case -1:
                 die("fork()");
@@ -262,7 +264,7 @@ static void filter(const char *cmd, int in, int out)
 
 static void logging(struct sockaddr_in *addr, int id, const char *fmt, ...)
 /*{{{*/ {
-    printf("\x1b[%sm===>\x1b[0m ", colortable[id+1]);
+    printf("\x1b[%sm==>\x1b[0m ", colortable[id+1]);
     printf("%d:%s:%d%s", getpid(),
         inet_ntoa(addr->sin_addr), ntohs(addr->sin_port),
         fmt == NULL ? "" : " ");
@@ -272,10 +274,11 @@ static void logging(struct sockaddr_in *addr, int id, const char *fmt, ...)
         vprintf(fmt, ap);
         va_end(ap);
     }
-    printf(" \x1b[%sm<===\x1b[0m\n", colortable[id+1]);
+    printf(" \x1b[%sm<==\x1b[0m\n", colortable[id+1]);
 } /*}}}*/
 
-static void logtraffic(struct sockaddr_in *addr, int id, const char *buf, ssize_t len)
+static void logtraffic(struct sockaddr_in *addr, int id,
+    const char *buf, ssize_t len)
 /*{{{*/ {
     logging(addr, id, NULL);
     if (len == 0) return;
@@ -308,4 +311,67 @@ void sig_child(int i)
         ;
     errno = i;
     return;
+} /*}}}*/
+
+static void arguments(int argc, char **argv)
+/*{{{*/ {
+    int listen_port = -1;
+
+    memset(&global.listen, '\0', sizeof(global.listen));
+    global.listen.sin_family = AF_INET;
+    memset(&global.remote, '\0', sizeof(global.remote));
+    global.remote.sin_family = AF_INET;
+
+    global.filter_in = DEFAULT_FILTER_IN;
+    global.filter_out = DEFAULT_FILTER_OUT;
+    if (!inet_aton(DEFAULT_LISTEN_ADDR, &global.listen.sin_addr))
+        diex("Argh! Invalid default listen address.");
+
+    for(;;) {
+        switch (getopt(argc, argv, "a:p:i:o:")) {
+            case 'a':
+                if (!inet_aton(optarg, &global.listen.sin_addr))
+                    diex("invalid listen address");
+                break;
+            case 'p':
+                listen_port = atoi(optarg);
+                if (listen_port & ~0xFFFF || listen_port == 0)
+                    diex("invalid listen port");
+                global.listen.sin_port = htons(listen_port);
+                break;
+            case 'i':
+                global.filter_in = optarg;
+                break;
+            case 'o':
+                global.filter_out = optarg;
+                break;
+            case -1:
+                goto arguments_getopt_end;
+            default:
+                usage();
+        }
+    }
+    arguments_getopt_end:
+    if (argc-optind != 2)
+        usage();
+    if (!inet_aton(argv[optind++], &global.remote.sin_addr))
+        diex("invalid remote address");
+    int remote_port = atoi(argv[optind++]);
+    if (remote_port & ~0xFFFF || remote_port == 0)
+        diex("invalid remote port");
+    global.remote.sin_port = htons(remote_port);
+    if (listen_port == -1)
+        global.listen.sin_port = global.remote.sin_port;
+} /*}}}*/
+
+static void usage()
+/*{{{*/ {
+    printf("Usage: %s [OPTIONS] <remote address> <remote port>\n"
+        "    -a <bind address>\n"
+        "    -p <listen port>\n"
+        "    -i <in filter>\n"
+        "    -o <out filter>\n"
+        /* TODO: argv[0] */
+        , "tcpfilter");
+    exit(EXIT_SUCCESS);
 } /*}}}*/
