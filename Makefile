@@ -17,9 +17,7 @@ else
         LDFLAGS+=
 endif
 
-all: tcpfilter
+all: tcpfilter dcat
 clean:
-	rm -f tcpfilter tcpfilter.o
+	rm -f tcpfilter dcat
 .PHONY: all clean
-
-tcpfilter: tcpfilter.o
