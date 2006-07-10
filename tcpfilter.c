@@ -219,7 +219,9 @@ static void handle_client(struct sockaddr_in *addr, int client)
                     }
                     continue;
                 }
-                logtraffic(addr, i, pipes[i].buf, pipes[i].len);
+                /* read from client/server */
+                if (!(i & 1))
+                    logtraffic(addr, i, pipes[i].buf, pipes[i].len);
             } else if (FD_ISSET(pipes[i].outfd, &wfds)) {
                 ssize_t n = write(pipes[i].outfd, pipes[i].buf+pipes[i].pos,
                     pipes[i].len);
@@ -242,6 +244,10 @@ static void handle_client(struct sockaddr_in *addr, int client)
                     warnx("wrote more than expected");
                     pipes[i].len = 0;
                 }
+                /* write to client/server */
+                if (i & 1)
+                    logtraffic(addr, i, pipes[i].buf+pipes[i].pos,
+                        pipes[i].len);
                 pipes[i].len -= n;
                 pipes[i].pos += n;
             }
