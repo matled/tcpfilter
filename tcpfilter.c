@@ -10,6 +10,8 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/select.h>
@@ -21,6 +23,8 @@
 #define die(...) err(EXIT_FAILURE, __VA_ARGS__)
 #define diex(...) errx(EXIT_FAILURE, __VA_ARGS__)
 
+#define LOG_CON_NEW 4
+#define LOG_CON_END 5
 #define DEFAULT_LISTEN_ADDR "0.0.0.0"
 #define DEFAULT_FILTER_IN "cat"
 #define DEFAULT_FILTER_OUT "cat"
@@ -35,11 +39,12 @@ static struct {
 
 static const char *colortable[] =
 /*{{{*/ {
-    "7;32", /* general */
     "7;31", /* client -> in filter */
-    "7;33", /* in filter -> server */
-    "7;36", /* server -> out filter */
-    "7;34", /* out filter -> client */
+    "1;31", /* in filter -> server */
+    "1;32", /* server -> out filter */
+    "7;32", /* out filter -> client */
+    "7;34", /* new connection */
+    "7;36", /* end of connection */
 }; /*}}}*/
 
 struct pipe_t
@@ -107,7 +112,7 @@ int main(int argc, char **argv)
 
 static void handle_client(struct sockaddr_in *addr, int client)
 /*{{{*/ {
-    logging(addr, -1, "new connection");
+    logging(addr, LOG_CON_NEW, "new connection");
 
     int server = socket(PF_INET, SOCK_STREAM, 0);
     if (server == -1) die("socket()");
@@ -247,7 +252,7 @@ static void handle_client(struct sockaddr_in *addr, int client)
         close(pipes[i].infd);
         close(pipes[i].outfd);
     }
-    logging(addr, -1, "end");
+    logging(addr, LOG_CON_END, "end");
 } /*}}}*/
 
 static void filter(const char *cmd, int in, int out)
@@ -264,9 +269,17 @@ static void filter(const char *cmd, int in, int out)
 
 static void logging(struct sockaddr_in *addr, int id, const char *fmt, ...)
 /*{{{*/ {
-    printf("\x1b[%sm==>\x1b[0m ", colortable[id+1]);
-    printf("%d:%s:%d%s", getpid(),
-        inet_ntoa(addr->sin_addr), ntohs(addr->sin_port),
+    struct timeval tv;
+    struct tm st;
+    if (gettimeofday(&tv, NULL) == -1)
+        die("gettimeofday()");
+    if (localtime_r(&tv.tv_sec, &st) == NULL)
+        die("localtime_r()");
+    printf("\x1b[%sm==>\x1b[0m ", colortable[id]);
+    printf("%04d-%02d-%02d %02d:%02d:%02d.%06u %d:%s:%d%s",
+        st.tm_year+1900, st.tm_mon, st.tm_mday,
+        st.tm_hour, st.tm_min, st.tm_sec, tv.tv_usec,
+        getpid(), inet_ntoa(addr->sin_addr), ntohs(addr->sin_port),
         fmt == NULL ? "" : " ");
     if (fmt != NULL) {
         va_list ap;
@@ -274,7 +287,7 @@ static void logging(struct sockaddr_in *addr, int id, const char *fmt, ...)
         vprintf(fmt, ap);
         va_end(ap);
     }
-    printf(" \x1b[%sm<==\x1b[0m\n", colortable[id+1]);
+    printf(" \x1b[%sm<==\x1b[0m\n", colortable[id]);
 } /*}}}*/
 
 static void logtraffic(struct sockaddr_in *addr, int id,
