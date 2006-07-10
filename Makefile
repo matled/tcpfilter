@@ -21,3 +21,5 @@ all: tcpfilter dcat
 clean:
 	rm -f tcpfilter dcat
 .PHONY: all clean
+
+tcpfilter: LDFLAGS+=-lssl

@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <openssl/md5.h>
 /* }}} */
 
 #define die(...) err(EXIT_FAILURE, __VA_ARGS__)
@@ -299,6 +300,26 @@ static void logging(struct sockaddr_in *addr, int id, const char *fmt, ...)
 static void logtraffic(struct sockaddr_in *addr, int id,
     const char *buf, ssize_t len)
 /*{{{*/ {
+    static unsigned char *lasthash = NULL;
+    static unsigned char *newhash = NULL;
+    if (lasthash == NULL || newhash == NULL) {
+        lasthash = malloc(2*MD5_DIGEST_LENGTH);
+        if (lasthash == NULL)
+            die("malloc()");
+        newhash = lasthash+MD5_DIGEST_LENGTH;
+        memset(lasthash, '\0', 2*MD5_DIGEST_LENGTH);
+        MD5((const unsigned char*)buf, len, lasthash);
+    } else {
+        MD5((const unsigned char*)buf, len, newhash);
+        unsigned char *tmp = newhash;
+        newhash = lasthash;
+        lasthash = tmp;
+        if (memcmp(lasthash, newhash, MD5_DIGEST_LENGTH) == 0) {
+            logging(addr, id, "COPY");
+            return;
+        }
+    }
+
     logging(addr, id, NULL);
     if (len == 0) return;
     int space = 0;
