@@ -133,6 +133,12 @@ static void handle_client(struct sockaddr_in *addr, int client)
 
     /* start filter programs {{{ */
     {
+        char buf[10];
+        setenv("CLIENT_IP", inet_ntoa(addr->sin_addr), 1);
+        snprintf(buf, 10, "%d", ntohs(addr->sin_port));
+        setenv("CLIENT_PORT", buf, 1);
+    }
+    {
         int fd[2][2];
         if (pipe(fd[0]) == -1) die("pipe()");
         if (pipe(fd[1]) == -1) die("pipe()");
